@@ -31,16 +31,23 @@ export function HowItWorks() {
             assets={ASSETS.CRYPTO}
             a="Gate.io"
             b="Binance"
-            note="Both give true hourly OHLC on the exact window instants."
+            note="Both give true hourly OHLC on the exact window instants. A GMT+1 day is rebuilt from 24 consecutive 1h bars — never a daily bar, which is UTC-aligned and an hour off."
           />
           <SourcePair
             title="Commodities"
             assets={ASSETS.COMMODITIES.map((a) => ASSET_LABELS[a])}
             a="Yahoo Finance"
             b="Nasdaq"
-            note="Same instrument, two independent vendors, daily session."
+            note="The same ETF proxy from two independent vendors, over the US session — not an hour. GLD, SLV, USO and CPER stand in for gold, silver, WTI and copper."
           />
         </div>
+
+        <p className="mt-4 rounded-md border border-ink-800 bg-ink-950 px-4 py-3 text-xs">
+          <strong className="text-zinc-300">CoinGecko is not used for settlement.</strong>{" "}
+          It rate-limits hard from shared IPs and reports sampled spot rather than true
+          open and close, so it decides nothing here. If a price from it is ever shown in
+          this app it is labelled display-only.
+        </p>
       </Section>
 
       <Section n="02" title="One source can never decide anything">
@@ -56,6 +63,12 @@ export function HowItWorks() {
           window, resolution reverts as retryable and the market is left completely
           untouched. The contract never settles from whichever source happened to
           answer, and it never invents a price.
+        </p>
+        <p>
+          <strong className="text-zinc-200">Five days</strong> after a window closes the
+          contract stops touching the web altogether, marks the market{" "}
+          <Code>INCONCLUSIVE</Code> and makes every stake refundable — so a feed that
+          never comes back cannot strand anyone&rsquo;s GEN.
         </p>
       </Section>
 
@@ -101,8 +114,14 @@ export function HowItWorks() {
         <p>
           Winners split the whole pool pro-rata, floor-divided so the contract can
           never over-pay. On an inconclusive market everyone withdraws their exact
-          stake. Payouts leave as a separate follow-up transaction after finality, so
-          your balance updates a little after the claim confirms.
+          stake — including after the five-day cutoff.
+        </p>
+        <p>
+          <strong className="text-zinc-200">GEN leaves as a second transaction.</strong>{" "}
+          Payouts are external messages that execute on finality, so your balance moves a
+          little after the claim confirms — measured at about 30 seconds on Studionet.
+          Spike watches your balance after a claim and tells you whether the money
+          actually arrived, rather than assuming it did.
         </p>
       </Section>
 

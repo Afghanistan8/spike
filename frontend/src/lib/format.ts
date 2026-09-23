@@ -34,8 +34,62 @@ export function gmt1Day(ts: number): string {
 }
 
 /** Today's date in GMT+1, as YYYY-MM-DD. */
-export function todayGmt1(): string {
-  return gmt1Day(Math.floor(Date.now() / 1000));
+export function todayGmt1(nowTs = Math.floor(Date.now() / 1000)): string {
+  return gmt1Day(nowTs);
+}
+
+// ---------------------------------------------------------------------------
+// One GMT+1 calendar, shared by every "today" / "tomorrow" / weekend decision.
+//
+// These are deliberately pure date-string functions rather than Date maths:
+// `new Date(...)` is browser-relative, so a user west of UTC-1 could otherwise
+// be handed a default day the contract rejects as already started.
+// ---------------------------------------------------------------------------
+
+/** 0 = Monday … 6 = Sunday, for a YYYY-MM-DD in the GMT+1 calendar. */
+export function weekdayGmt1(day: string): number {
+  const ms = Date.UTC(
+    Number(day.slice(0, 4)),
+    Number(day.slice(5, 7)) - 1,
+    Number(day.slice(8, 10))
+  );
+  return (Math.floor(ms / 86400000) + 3) % 7; // 1970-01-01 was a Thursday
+}
+
+export function isWeekendGmt1(day: string): boolean {
+  return weekdayGmt1(day) >= 5;
+}
+
+/** Shift a YYYY-MM-DD by whole days, staying in the GMT+1 calendar. */
+export function addDays(day: string, n: number): string {
+  const ms =
+    Date.UTC(
+      Number(day.slice(0, 4)),
+      Number(day.slice(5, 7)) - 1,
+      Number(day.slice(8, 10))
+    ) +
+    n * 86400000;
+  const d = new Date(ms);
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+}
+
+/**
+ * The earliest GMT+1 day the contract would accept for this category.
+ *
+ * `create_market` rejects any window that has already started, so the earliest
+ * legal target is tomorrow in GMT+1. Commodity sessions do not exist at the
+ * weekend, so those skip to the next weekday.
+ */
+export function defaultTargetDay(
+  category: string,
+  nowTs = Math.floor(Date.now() / 1000)
+): string {
+  let day = addDays(todayGmt1(nowTs), 1);
+  if (category === "COMMODITIES") {
+    while (isWeekendGmt1(day)) day = addDays(day, 1);
+  }
+  return day;
 }
 
 export function countdown(toTs: number, nowTs = Math.floor(Date.now() / 1000)): string {

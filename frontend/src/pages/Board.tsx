@@ -2,20 +2,34 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Empty, MarketCard, Spinner } from "../components/ui";
-import { getMarkets, getStats, type Market } from "../lib/contract";
-import { HAS_CONTRACT, PAGE_SIZE } from "../lib/env";
+import {
+  getActivity,
+  getMarketsByCategory,
+  getStats,
+  type Market,
+} from "../lib/contract";
+import { CATEGORIES, HAS_CONTRACT, PAGE_SIZE, type Category } from "../lib/env";
 import { fmtGen } from "../lib/format";
-
-type Tab = "CRYPTO" | "COMMODITIES";
+import { useUniverse } from "../lib/useUniverse";
 
 export function Board() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [stats, setStats] = useState<any>(null);
-  const [tab, setTab] = useState<Tab>("CRYPTO");
+  const [activity, setActivity] = useState<string[]>([]);
+  const [tab, setTab] = useState<Category>("CRYPTO");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
+
+  const universe = useUniverse();
+
+  // Paginating a filtered subset of get_markets() gave wrong page counts, so the
+  // category is pushed down into the contract view and the offset resets with it.
+  function pickTab(t: Category) {
+    setTab(t);
+    setOffset(0);
+  }
 
   useEffect(() => {
     if (!HAS_CONTRACT) {
@@ -24,12 +38,11 @@ export function Board() {
     }
     let live = true;
     setLoading(true);
-    Promise.all([getMarkets(offset, PAGE_SIZE), getStats()])
-      .then(([page, s]) => {
+    getMarketsByCategory(tab, offset, PAGE_SIZE)
+      .then((page) => {
         if (!live) return;
         setMarkets(page.items ?? []);
         setTotal(page.total ?? 0);
-        setStats(s);
         setError(null);
       })
       .catch((e) => live && setError(e?.message ?? String(e)))
@@ -37,12 +50,23 @@ export function Board() {
     return () => {
       live = false;
     };
-  }, [offset]);
+  }, [tab, offset]);
 
-  const shown = useMemo(
-    () => markets.filter((m) => m.category === tab),
-    [markets, tab]
-  );
+  useEffect(() => {
+    if (!HAS_CONTRACT) return;
+    let live = true;
+    getStats()
+      .then((s) => live && setStats(s))
+      .catch(() => {
+        /* the health line in the footer already reports this */
+      });
+    getActivity(0, 8)
+      .then((a) => live && setActivity(a.items ?? []))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const groups = useMemo(() => {
     const g: Record<string, Market[]> = {
@@ -51,14 +75,14 @@ export function Board() {
       READY_TO_SETTLE: [],
       SETTLED: [],
     };
-    for (const m of shown) {
+    for (const m of markets) {
       if (m.phase === "OPEN") g.OPEN.push(m);
       else if (m.phase === "WINDOW_LIVE") g.WINDOW_LIVE.push(m);
       else if (m.phase === "READY_TO_SETTLE") g.READY_TO_SETTLE.push(m);
       else g.SETTLED.push(m);
     }
     return g;
-  }, [shown]);
+  }, [markets]);
 
   return (
     <div>
@@ -68,9 +92,9 @@ export function Board() {
           <span className="text-spike"> Settled by two sources, not by us.</span>
         </h1>
         <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-400">
-          Every market resolves inside the contract, from two independent public
-          feeds fetched by every validator. If the feeds disagree, nobody wins and
-          every stake is refundable. There is no admin key.
+          Every market resolves inside the contract, from two independent public feeds
+          fetched by every validator. If the feeds disagree, nobody wins and every stake is
+          refundable. There is no admin key.
         </p>
 
         {stats && (
@@ -84,10 +108,10 @@ export function Board() {
       </section>
 
       <div className="mb-5 flex items-center gap-1 border-b border-ink-800">
-        {(["CRYPTO", "COMMODITIES"] as Tab[]).map((t) => (
+        {CATEGORIES.map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => pickTab(t)}
             className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition-colors ${
               tab === t
                 ? "border-spike text-spike"
@@ -104,9 +128,12 @@ export function Board() {
 
       {tab === "COMMODITIES" && (
         <p className="mb-4 text-xs text-zinc-500">
-          Commodities settle on liquid ETF proxies (GLD, SLV, USO, CPER) over the US
-          session, because no second keyless public feed serves intraday commodity
-          data. Labelled honestly everywhere.
+          Commodities settle on liquid ETF proxies (
+          {universe.assets.COMMODITIES.map((a) => universe.label(a).split(" ")[1])
+            .join(", ")
+            .replace(/[()]/g, "")}
+          ) over the US session, because no second keyless public feed serves intraday
+          commodity data. Labelled honestly everywhere.
         </p>
       )}
 
@@ -116,18 +143,16 @@ export function Board() {
         </div>
       )}
 
-      {error && (
-        <Empty title="Could not reach the contract" body={error} />
-      )}
+      {error && <Empty title="Could not reach the contract" body={error} />}
 
-      {!loading && !error && shown.length === 0 && (
+      {!loading && !error && markets.length === 0 && (
         <Empty
           title="No markets here yet"
           body="Anyone can create one — there is no gatekeeper."
         />
       )}
 
-      {!loading && !error && shown.length > 0 && (
+      {!loading && !error && markets.length > 0 && (
         <div className="space-y-8">
           <Group title="Open for staking" markets={groups.OPEN} />
           <Group title="Window live" markets={groups.WINDOW_LIVE} />
@@ -140,7 +165,7 @@ export function Board() {
         <div className="mt-8 flex items-center justify-center gap-3">
           <button
             className="btn-ghost"
-            disabled={offset === 0}
+            disabled={offset === 0 || loading}
             onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
           >
             Previous
@@ -150,14 +175,46 @@ export function Board() {
           </span>
           <button
             className="btn-ghost"
-            disabled={offset + PAGE_SIZE >= total}
+            disabled={offset + PAGE_SIZE >= total || loading}
             onClick={() => setOffset(offset + PAGE_SIZE)}
           >
             Next
           </button>
         </div>
       )}
+
+      {activity.length > 0 && (
+        <section className="mt-12">
+          <h2 className="label mb-3">Recent activity</h2>
+          <ul className="card divide-y divide-ink-800 text-xs">
+            {activity.map((line, i) => (
+              <ActivityRow key={i} line={line} />
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
+  );
+}
+
+/** Activity lines are compact pipe-delimited records written by the contract. */
+function ActivityRow({ line }: { line: string }) {
+  const [kind, ...rest] = line.split("|");
+  const tone: Record<string, string> = {
+    CREATE: "text-sky-300",
+    STAKE: "text-spike",
+    REFUND: "text-amber-300",
+    RESOLVE: "text-emerald-300",
+    CLAIM: "text-emerald-300",
+    TERMINAL: "text-zinc-400",
+  };
+  return (
+    <li className="flex items-center gap-3 px-4 py-2">
+      <span className={`mono w-20 shrink-0 font-bold ${tone[kind] ?? "text-zinc-400"}`}>
+        {kind}
+      </span>
+      <span className="mono truncate text-zinc-500">{rest.join(" · ")}</span>
+    </li>
   );
 }
 

@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
-import { Banner, Spinner } from "../components/ui";
-import { createMarket } from "../lib/contract";
+import { Banner, Spinner, WalletError } from "../components/ui";
+import { createMarket, getMarketByUniqueKey } from "../lib/contract";
 import {
   ASSETS,
   ASSET_LABELS,
@@ -12,7 +12,7 @@ import {
   SOURCES,
   type Category,
 } from "../lib/env";
-import { todayGmt1 } from "../lib/format";
+import { defaultTargetDay, isWeekendGmt1, todayGmt1 } from "../lib/format";
 import { useWallet } from "../lib/useWallet";
 import { explainError } from "../lib/write";
 
@@ -23,13 +23,14 @@ export function CreateMarket() {
   const [kind, setKind] = useState(KIND_DIRECTION);
   const [category, setCategory] = useState<Category>("CRYPTO");
   const [asset, setAsset] = useState("ADA");
-  const [day, setDay] = useState(tomorrow());
+  const [day, setDay] = useState(() => defaultTargetDay("CRYPTO"));
   const [hour, setHour] = useState(14);
 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "good" | "error" | "warn"; text: string } | null>(
     null
   );
+  const [duplicate, setDuplicate] = useState<string | null>(null);
 
   // Only CRYPTO dominance is hourly; everything else uses -1.
   const hourly = category === "CRYPTO" && kind === KIND_DOMINANCE;
@@ -38,15 +39,41 @@ export function CreateMarket() {
 
   const uniqueKey = `${kind}|${category}|${effectiveAsset}|${day}|${effectiveHour}`;
 
-  const weekendProblem = useMemo(() => {
-    if (category !== "COMMODITIES") return null;
-    const d = new Date(day + "T00:00:00Z").getUTCDay();
-    return d === 0 || d === 6
+  function pickCategory(c: Category) {
+    setCategory(c);
+    setAsset(ASSETS[c][0]);
+    // Commodities have no weekend session, so the default day differs per category.
+    setDay(defaultTargetDay(c));
+  }
+
+  // The contract owns the rules; these are the same checks so the user finds out
+  // before paying for a signature.
+  const weekendProblem =
+    category === "COMMODITIES" && isWeekendGmt1(day)
       ? "Commodity markets cannot target a Saturday or Sunday — there is no session."
       : null;
-  }, [category, day]);
 
-  const pastProblem = day <= todayGmt1() ? "Pick a day that has not started yet in GMT+1." : null;
+  const pastProblem =
+    day <= todayGmt1()
+      ? "Pick a day that has not started yet in GMT+1 (the GMT+1 date rolls at 23:00 UTC)."
+      : null;
+
+  // Cheap read, so check for a duplicate before asking anyone to sign.
+  useEffect(() => {
+    let live = true;
+    setDuplicate(null);
+    if (weekendProblem || pastProblem) return;
+    getMarketByUniqueKey(kind, category, effectiveAsset, day, effectiveHour)
+      .then((m) => {
+        if (live && m && m.market_id) setDuplicate(m.market_id);
+      })
+      .catch(() => {
+        /* a failed lookup must not block creation; the contract still rejects duplicates */
+      });
+    return () => {
+      live = false;
+    };
+  }, [kind, category, effectiveAsset, day, effectiveHour, weekendProblem, pastProblem]);
 
   async function submit() {
     if (!account) return;
@@ -72,7 +99,7 @@ export function CreateMarket() {
   }
 
   const blocked = weekendProblem || pastProblem;
-  const disabled = !account || !onStudionet || busy || !!blocked;
+  const disabled = !account || !onStudionet || busy || !!blocked || !!duplicate;
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -81,7 +108,11 @@ export function CreateMarket() {
         Anyone can list one. There is no approval step and no listing fee beyond gas.
       </p>
 
-      <div className="card mt-6 space-y-5 p-5">
+      <div className="mt-4">
+        <WalletError />
+      </div>
+
+      <div className="card mt-4 space-y-5 p-5">
         <div>
           <label className="label">Kind</label>
           <div className="mt-2 grid grid-cols-2 gap-2">
@@ -107,10 +138,7 @@ export function CreateMarket() {
               <Choice
                 key={c}
                 active={category === c}
-                onClick={() => {
-                  setCategory(c);
-                  setAsset(ASSETS[c][0]);
-                }}
+                onClick={() => pickCategory(c)}
                 title={c === "CRYPTO" ? "Crypto" : "Commodities"}
                 sub={ASSETS[c].join(" · ")}
               />
@@ -151,6 +179,7 @@ export function CreateMarket() {
               type="date"
               className="input mono mt-1"
               value={day}
+              min={defaultTargetDay(category)}
               onChange={(e) => setDay(e.target.value)}
             />
           </div>
@@ -191,6 +220,15 @@ export function CreateMarket() {
           </p>
         </div>
 
+        {duplicate && (
+          <Banner tone="warn">
+            This market already exists —{" "}
+            <Link to={`/market/${duplicate}`} className="font-bold underline">
+              open #{duplicate}
+            </Link>{" "}
+            instead. Change the day, asset or hour to create a different one.
+          </Banner>
+        )}
         {blocked && <Banner tone="warn">{blocked}</Banner>}
         {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
         {!account && <Banner tone="info">Connect a wallet to create a market.</Banner>}
@@ -219,9 +257,7 @@ function Choice({
     <button
       onClick={onClick}
       className={`rounded-md border p-3 text-left transition-colors ${
-        active
-          ? "border-spike bg-spike/10"
-          : "border-ink-700 hover:border-zinc-500"
+        active ? "border-spike bg-spike/10" : "border-ink-700 hover:border-zinc-500"
       }`}
     >
       <p className={`text-sm font-bold ${active ? "text-spike" : "text-zinc-200"}`}>
@@ -230,9 +266,4 @@ function Choice({
       <p className="mt-0.5 text-[11px] text-zinc-500">{sub}</p>
     </button>
   );
-}
-
-function tomorrow(): string {
-  const d = new Date(Date.now() + 86400000 + 3600000);
-  return d.toISOString().slice(0, 10);
 }

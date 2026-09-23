@@ -176,3 +176,74 @@ def test_user_positions_are_indexed(spike, direct_vm, direct_alice):
     got = spike.get_user_positions(direct_alice.as_hex, 0, 50)
     assert got["total"] == 2
     assert {p["market_id"] for p in got["items"]} == {a, b}
+
+
+# -- no rejection path can trap GEN -----------------------------------------
+
+
+def test_no_rejection_path_traps_gen(spike, direct_vm, direct_alice, direct_bob, transfers):
+    """
+    Every way a stake can be refused must leave the staker whole.
+
+    Value attached to a call is credited to the contract even when the call
+    reverts, so a refusal that neither records a position nor returns the GEN
+    would silently swallow it. This walks all three refusal reasons and asserts
+    the contract gave back exactly what it was sent, every time.
+    """
+    mid = open_market(spike)
+
+    sent = 0
+    # 1. below the minimum, with no position yet
+    stake(direct_vm, spike, mid, "UP", ONE_GEN // 2, direct_alice)
+    sent += ONE_GEN // 2
+    assert transfers.total_to(direct_alice) == sent
+
+    # 2. above the cap
+    stake(direct_vm, spike, mid, "UP", 6 * ONE_GEN, direct_alice)
+    sent += 6 * ONE_GEN
+    assert transfers.total_to(direct_alice) == sent
+
+    # now hold a real position so the side-switch and top-up rules can bite
+    stake(direct_vm, spike, mid, "UP", 4 * ONE_GEN, direct_alice)
+    assert transfers.total_to(direct_alice) == sent  # accepted, nothing returned
+
+    # 3. side switch
+    stake(direct_vm, spike, mid, "DOWN", ONE_GEN, direct_alice)
+    sent += ONE_GEN
+    assert transfers.total_to(direct_alice) == sent
+
+    # 4. top-up that would breach the cap
+    stake(direct_vm, spike, mid, "UP", 2 * ONE_GEN, direct_alice)
+    sent += 2 * ONE_GEN
+    assert transfers.total_to(direct_alice) == sent
+
+    # 5. after the betting cutoff
+    direct_vm.warp("2026-10-15T09:00:00Z")
+    stake(direct_vm, spike, mid, "UP", ONE_GEN, direct_bob)
+    assert transfers.total_to(direct_bob) == ONE_GEN
+
+    # the only GEN the contract kept is the one stake it actually accepted
+    assert spike.get_stats()["total_staked_wei"] == str(4 * ONE_GEN)
+    assert spike.get_position(mid, direct_alice.as_hex)["amount_wei"] == str(4 * ONE_GEN)
+    assert spike.get_position(mid, direct_bob.as_hex) == {}
+
+
+def test_rejected_stake_is_recoverable_even_if_transfer_is_deferred(
+    spike, direct_vm, direct_alice, transfers
+):
+    """
+    The refund is emitted, not pushed synchronously.
+
+    Outbound transfers execute on finality, so what the contract owes must be
+    fully described by the emitted message - there is no second chance to
+    re-derive it later. Assert the emitted value matches the attached value
+    exactly, for the exact wallet that sent it.
+    """
+    mid = open_market(spike)
+    out = stake(direct_vm, spike, mid, "SIDEWAYS", 3 * ONE_GEN, direct_alice)
+
+    assert out.startswith("REFUNDED:")
+    assert len(transfers) == 1
+    recipient, amount = transfers[0]
+    assert recipient == direct_alice.as_hex
+    assert amount == 3 * ONE_GEN

@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 
 import { PHASE_LABEL, fmtGen, pct, phaseTone } from "../lib/format";
 import type { Market } from "../lib/contract";
-import { SOURCE_LABELS } from "../lib/env";
+import { CHAIN_ID, NATIVE_CURRENCY, RPC_URL, SOURCE_LABELS } from "../lib/env";
+import { useWallet } from "../lib/useWallet";
 
 export function Chip({ children, tone }: { children: ReactNode; tone?: string }) {
   return <span className={`chip ${tone ?? "bg-ink-800 text-zinc-400"}`}>{children}</span>;
@@ -43,6 +44,50 @@ export function Banner({
   } as const;
   return (
     <div className={`rounded-md border px-4 py-3 text-sm ${tones[tone]}`}>{children}</div>
+  );
+}
+
+/**
+ * Wallet failures, made visible.
+ *
+ * useWallet() has always exposed `error`; until now nothing rendered it, so a
+ * rejected connect or a failed network switch was silent. When the switch is
+ * what failed we also print the details needed to add the chain by hand.
+ */
+export function WalletError() {
+  const { error, hasWallet, account, onStudionet } = useWallet();
+  if (!error) return null;
+
+  const switchFailed = /network|chain|switch|add/i.test(error);
+
+  return (
+    <Banner tone="error">
+      <p className="font-semibold">{error}</p>
+      {!hasWallet && (
+        <p className="mt-1 text-xs opacity-80">
+          Spike needs an injected EIP-1193 wallet such as MetaMask or Rabby.
+        </p>
+      )}
+      {switchFailed && account && !onStudionet && (
+        <div className="mt-2 text-xs opacity-90">
+          <p>Add the network manually with these values:</p>
+          <dl className="mono mt-1 space-y-0.5">
+            <div>
+              Network&nbsp;name: <span className="text-zinc-100">GenLayer Studionet</span>
+            </div>
+            <div>
+              RPC&nbsp;URL: <span className="text-zinc-100">{RPC_URL}</span>
+            </div>
+            <div>
+              Chain&nbsp;ID: <span className="text-zinc-100">{CHAIN_ID}</span>
+            </div>
+            <div>
+              Symbol: <span className="text-zinc-100">{NATIVE_CURRENCY.symbol}</span>
+            </div>
+          </dl>
+        </div>
+      )}
+    </Banner>
   );
 }
 

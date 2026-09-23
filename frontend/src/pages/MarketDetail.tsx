@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { Banner, Chip, DirectionBar, DominanceRace, PhaseChip, Spinner } from "../components/ui";
+import {
+  Banner,
+  Chip,
+  DirectionBar,
+  DominanceRace,
+  PhaseChip,
+  Spinner,
+  WalletError,
+} from "../components/ui";
 import {
   claim as claimCall,
   getMarket,
@@ -14,7 +22,9 @@ import {
   type Market,
   type Position,
 } from "../lib/contract";
+import { getNativeBalance } from "../lib/client";
 import { MAX_STAKE_WEI, MIN_STAKE_WEI, SOURCE_LABELS } from "../lib/env";
+import { watchPayout } from "../lib/payout";
 import { countdown, fmtGen, gmt1, parseGen, shortAddr } from "../lib/format";
 import { useWallet } from "../lib/useWallet";
 import { explainError, parseStakeOutcome } from "../lib/write";
@@ -67,6 +77,12 @@ export function MarketDetail() {
     setMsg(null);
     try {
       const wei = parseGen(amount);
+      let balanceBefore = 0n;
+      try {
+        balanceBefore = await getNativeBalance(account);
+      } catch {
+        /* confirmation is best-effort */
+      }
       const res = await takePosition(account, market.market_id, side, wei);
       const outcome = parseStakeOutcome(res.returned);
       if (outcome.kind === "staked") {
@@ -77,8 +93,22 @@ export function MarketDetail() {
       } else if (outcome.kind === "refunded") {
         setMsg({
           tone: "warn",
-          text: `Not accepted — ${outcome.reason}. Your GEN was sent back; it arrives as a separate transaction after finality.`,
+          text: `Not accepted — ${outcome.reason}. Returning your GEN…`,
         });
+        const watch = await watchPayout(account, balanceBefore - wei);
+        setMsg(
+          watch.kind === "arrived"
+            ? {
+                tone: "good",
+                text: `Not accepted — ${outcome.reason}. Your ${fmtGen(
+                  watch.delta
+                )} GEN came back.`,
+              }
+            : {
+                tone: "warn",
+                text: `Not accepted — ${outcome.reason}. The refund is emitted on finality and had not landed yet; check your balance shortly.`,
+              }
+        );
       } else {
         setMsg({ tone: "info", text: `Submitted. Contract said: ${outcome.raw}` });
       }
@@ -105,16 +135,54 @@ export function MarketDetail() {
     }
   }
 
+  /**
+   * Claim, then verify the GEN actually landed.
+   *
+   * The contract emits an external message that executes on finalisation, so
+   * `claimed = true` alone does not mean the wallet was paid. We snapshot the
+   * balance first and watch it, so a stuck payout cannot read as success.
+   */
   async function onClaim() {
     if (!account || !market) return;
     setBusy("claim");
     setMsg(null);
+    let before = 0n;
+    try {
+      before = await getNativeBalance(account);
+    } catch {
+      /* if we cannot read it we simply cannot confirm; the claim still proceeds */
+    }
     try {
       const res = await claimCall(account, market.market_id);
       setMsg({
-        tone: "good",
-        text: `${String(res.returned)} — GEN arrives as a separate transaction once this one finalises.`,
+        tone: "info",
+        text: `${String(res.returned)} — waiting for the payout to finalise…`,
       });
+      await load();
+
+      const watch = await watchPayout(account, before);
+      if (watch.kind === "arrived") {
+        setMsg({
+          tone: "good",
+          text: `Paid. ${fmtGen(watch.delta)} GEN arrived in your wallet after ${Math.round(
+            watch.afterMs / 1000
+          )}s.`,
+        });
+      } else if (watch.kind === "pending") {
+        setMsg({
+          tone: "warn",
+          text:
+            `The contract recorded your claim, but no GEN had reached your wallet after ` +
+            `${Math.round(watch.waitedMs / 1000)}s. Outbound transfers execute on finality, ` +
+            `so it may still land — check your balance shortly. If it never arrives, the ` +
+            `payout path is broken, not your position.`,
+        });
+      } else {
+        setMsg({
+          tone: "warn",
+          text: `Claim recorded, but the balance check failed (${watch.reason}). Check your wallet.`,
+        });
+      }
       await load();
     } catch (e) {
       setMsg({ tone: "error", text: explainError(e) });
@@ -137,6 +205,32 @@ export function MarketDetail() {
   const canResolve = market.phase === "READY_TO_SETTLE";
   const claimable = position ? BigInt(position.claimable_wei || "0") : 0n;
   const disabled = !account || !onStudionet;
+
+  // The same rules the contract enforces, checked before anyone signs. A
+  // rejected stake is refunded rather than reverted, but it still costs a
+  // round trip and is confusing, so it is better not to send it at all.
+  const held = position && position.market_id ? BigInt(position.amount_wei || "0") : 0n;
+  const lockedSide = position && position.market_id ? position.side : null;
+  const stakeProblem = ((): string | null => {
+    let wei: bigint;
+    try {
+      wei = parseGen(amount);
+    } catch {
+      return "Enter an amount in GEN, for example 1 or 2.5.";
+    }
+    if (wei <= 0n) return "Enter an amount greater than zero.";
+    if (lockedSide && lockedSide !== side)
+      return `You already backed ${lockedSide} on this market. You cannot switch sides.`;
+    if (held === 0n && wei < MIN_STAKE_WEI)
+      return `The first stake on a market must be at least ${fmtGen(MIN_STAKE_WEI, 0)} GEN.`;
+    if (held + wei > MAX_STAKE_WEI)
+      return held === 0n
+        ? `The most you can stake on one market is ${fmtGen(MAX_STAKE_WEI, 0)} GEN.`
+        : `You already hold ${fmtGen(held)} GEN here, so you can add at most ${fmtGen(
+            MAX_STAKE_WEI - held
+          )} GEN.`;
+    return null;
+  })();
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
@@ -227,6 +321,7 @@ export function MarketDetail() {
       </div>
 
       <aside className="space-y-4">
+        <WalletError />
         {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
 
         {disabled && (
@@ -240,19 +335,26 @@ export function MarketDetail() {
             <h2 className="label mb-3">Take a position</h2>
 
             <div className="grid grid-cols-2 gap-2">
-              {market.sides.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setSide(s)}
-                  className={`rounded-md border px-3 py-2 text-sm font-bold transition-colors ${
-                    side === s
-                      ? "border-spike bg-spike/10 text-spike"
-                      : "border-ink-700 text-zinc-400 hover:border-zinc-500"
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
+              {market.sides.map((s) => {
+                const locked = lockedSide !== null && lockedSide !== s;
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setSide(s)}
+                    disabled={locked}
+                    title={locked ? `You already backed ${lockedSide}` : undefined}
+                    className={`rounded-md border px-3 py-2 text-sm font-bold transition-colors ${
+                      side === s
+                        ? "border-spike bg-spike/10 text-spike"
+                        : locked
+                          ? "cursor-not-allowed border-ink-800 text-zinc-700"
+                          : "border-ink-700 text-zinc-400 hover:border-zinc-500"
+                    }`}
+                  >
+                    {s}
+                  </button>
+                );
+              })}
             </div>
 
             <label className="label mt-4 block">Stake (1–5 GEN)</label>
@@ -268,9 +370,15 @@ export function MarketDetail() {
               {fmtGen(MAX_STAKE_WEI, 0)} GEN. You cannot switch sides.
             </p>
 
+            {stakeProblem && account && (
+              <p className="mt-2 text-[11px] font-semibold text-amber-300">
+                {stakeProblem}
+              </p>
+            )}
+
             <button
               className="btn-primary mt-4 w-full"
-              disabled={disabled || busy !== null}
+              disabled={disabled || busy !== null || stakeProblem !== null}
               onClick={onStake}
             >
               {busy === "stake" ? <Spinner /> : null}

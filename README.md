@@ -191,7 +191,18 @@ itself with no code changes. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Current state
 
-- Contract deployed and answering on Studionet
+- Contract deployed and answering on Studionet at
+  `0xE1582599A503a2E97B6640545B1DCB0c85e49841` — **unchanged**; the fix pass of
+  2026-09-23 needed no contract edit and no redeploy
+- Frontend live at [spike-sepia.vercel.app](https://spike-sepia.vercel.app/)
 - Market #1 created on-chain (ADA, direction, 2026-09-25)
+- **Outbound GEN works on Studionet.** An Intelligent Contract really can pay a
+  wallet via `emit_transfer`, measured with a disposable probe: 1 GEN moved
+  contract → EOA about 30 seconds after the call was accepted. An earlier
+  revision of `docs/ARCHITECTURE.md` claimed this did not work; that was wrong
+  and is corrected. Refunds and claims are sound.
 - Payable calls (staking) require a browser wallet — the `genlayer` CLI
   hardcodes `value: 0n` and cannot attach GEN to a call. Use the UI.
+
+See [docs/FIX-AUDIT.md](docs/FIX-AUDIT.md) for the live-site audit behind that
+correction.

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { Banner, Empty, PhaseChip, Spinner } from "../components/ui";
+import { Banner, Empty, PhaseChip, Spinner, WalletError } from "../components/ui";
 import { claim as claimCall, getUserPositions, type Position } from "../lib/contract";
 import { HAS_CONTRACT } from "../lib/env";
+import { getNativeBalance } from "../lib/client";
 import { fmtGen } from "../lib/format";
+import { watchPayout } from "../lib/payout";
 import { useWallet } from "../lib/useWallet";
 import { explainError } from "../lib/write";
 
@@ -13,7 +15,10 @@ export function Portfolio() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [msg, setMsg] = useState<{ tone: "good" | "error"; text: string } | null>(null);
+  const [msg, setMsg] = useState<{
+    tone: "good" | "error" | "warn" | "info";
+    text: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     if (!account || !HAS_CONTRACT) return;
@@ -35,12 +40,43 @@ export function Portfolio() {
     if (!account) return;
     setBusy(marketId);
     setMsg(null);
+    let before = 0n;
+    try {
+      before = await getNativeBalance(account);
+    } catch {
+      /* confirmation is best-effort */
+    }
     try {
       const res = await claimCall(account, marketId);
       setMsg({
-        tone: "good",
-        text: `${String(res.returned)} — GEN arrives as a separate transaction once this one finalises.`,
+        tone: "info",
+        text: `${String(res.returned)} — waiting for the payout to finalise…`,
       });
+      await load();
+
+      // claimed = true only means the message was emitted; watch the wallet.
+      const watch = await watchPayout(account, before);
+      if (watch.kind === "arrived") {
+        setMsg({
+          tone: "good",
+          text: `Paid. ${fmtGen(watch.delta)} GEN arrived after ${Math.round(
+            watch.afterMs / 1000
+          )}s.`,
+        });
+      } else if (watch.kind === "pending") {
+        setMsg({
+          tone: "warn",
+          text:
+            `Your claim was recorded, but no GEN had reached your wallet after ` +
+            `${Math.round(watch.waitedMs / 1000)}s. Transfers execute on finality, so it ` +
+            `may still land — check your balance shortly.`,
+        });
+      } else {
+        setMsg({
+          tone: "warn",
+          text: `Claim recorded, but the balance check failed (${watch.reason}).`,
+        });
+      }
       await load();
     } catch (e) {
       setMsg({ tone: "error", text: explainError(e) });
@@ -61,6 +97,10 @@ export function Portfolio() {
   return (
     <div>
       <h1 className="text-2xl font-extrabold text-zinc-50">Portfolio</h1>
+
+      <div className="mt-4 empty:mt-0">
+        <WalletError />
+      </div>
 
       <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat label="Positions" value={String(positions.length)} />

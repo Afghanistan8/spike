@@ -79,6 +79,9 @@ funds, so it appears nowhere in this repo. External messages always execute
 `on='finalized'`, which is why payouts land as a separate follow-up transaction
 and the UI says so.
 
+**This path is verified working on Studionet** (2026-09-23). An earlier revision
+of this document claimed the opposite; see §6.
+
 ### `take_position` cannot revert once value is attached
 
 GEN attached to a call is credited to the contract even when the call reverts.
@@ -242,10 +245,28 @@ comes from a contract view. Chain id, RPC and contract address live in
 - **Payable calls need a browser wallet.** The `genlayer` CLI hardcodes
   `value: 0n` in its write path, so it cannot attach GEN to `take_position`.
   Creating, resolving and claiming work from the CLI; staking does not.
-- **Studionet has no EVM layer.** Ghost contracts and balances are simulated in
-  a database there, so the `emit_transfer` payout path cannot be exercised
-  end-to-end on Studionet. It is covered in direct-mode tests via the `EthSend`
-  hook and is the documented-correct form for a real network.
+- ~~**Studionet has no EVM layer**, so the `emit_transfer` payout path cannot be
+  exercised end-to-end there.~~ **This was wrong, and it was the most dangerous
+  sentence in this repo.** Corrected 2026-09-23 after testing it instead of
+  trusting it.
+
+  The claim was read off the doc warning *"EVM contract interaction **beyond
+  value transfers to EOAs** is not implemented"*, which actually says value
+  transfers to EOAs **are** supported — only EVM *method* calls are not. Spike
+  only ever does the former.
+
+  Measured with a disposable probe contract
+  (`scripts/payout_probe/PayoutProbe.py`, deployed to
+  `0xf65908DFD8210593c3da8E599f85F8c389754c78`, never part of the product):
+  funded with 3 GEN, pushed 1 GEN to `0xBEEF…0001`, and via raw
+  `eth_getBalance` the recipient went `0 → 1000000000000000000` while the probe
+  went `3 GEN → 2 GEN`, roughly 30 seconds after the call was accepted.
+
+  So outbound GEN works on Studionet, the refund and claim paths are correct as
+  written, and no contract change was needed. Balances there are still simulated
+  in a database rather than held by a real ghost contract, which is why the
+  settlement is fast and why this should be re-checked on a network with a true
+  EVM layer.
 - **Commodity dominance is a daily-session ranking**, not an hourly one. This is
   a data-availability limit, not an implementation shortcut.
 - **CoinGecko is display-only.** It is not compiled into the contract.

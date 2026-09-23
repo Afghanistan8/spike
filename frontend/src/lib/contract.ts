@@ -10,6 +10,7 @@ import type { GenLayerClient } from "genlayer-js/types";
 
 import { CONTRACT_ADDRESS, HAS_CONTRACT, PAGE_SIZE } from "./env";
 import { readClient, writeClient } from "./client";
+import { readFailureMessage, recordError, recordOk } from "./health";
 import { writeWithEstimatedFees, type WriteResult } from "./write";
 
 export type Phase =
@@ -86,12 +87,20 @@ function addr(): `0x${string}` {
 
 async function read<T>(functionName: string, args: any[] = []): Promise<T> {
   const client = readClient();
-  const out = await client.readContract({
-    address: addr(),
-    functionName,
-    args,
-  });
-  return out as T;
+  try {
+    const out = await client.readContract({
+      address: addr(),
+      functionName,
+      args,
+    });
+    recordOk(functionName);
+    return out as T;
+  } catch (e) {
+    recordError(functionName, e);
+    // Re-thrown with the RPC URL and the raw exception attached, so a failure
+    // surfaces as a precise sentence rather than a blank board.
+    throw new Error(readFailureMessage(functionName, e), { cause: e });
+  }
 }
 
 // ---------------------------------------------------------------- reads

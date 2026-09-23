@@ -102,6 +102,29 @@ export async function ensureStudionet(): Promise<void> {
   }
 }
 
+/**
+ * Native GEN balance for any address, straight off the RPC.
+ *
+ * Used to confirm a payout actually landed. Outbound transfers execute on
+ * finalisation, so `claimed = true` on its own only means the contract emitted
+ * the message — not that the wallet received anything.
+ */
+export async function getNativeBalance(address: string): Promise<bigint> {
+  const res = await fetch(RPC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_getBalance",
+      params: [address, "latest"],
+    }),
+  });
+  const json = await res.json();
+  if (json?.error) throw new Error(json.error?.message ?? "eth_getBalance failed");
+  return BigInt(json?.result ?? "0x0");
+}
+
 export async function connectedAccount(): Promise<`0x${string}` | null> {
   const provider = getInjectedProvider();
   if (!provider) return null;
