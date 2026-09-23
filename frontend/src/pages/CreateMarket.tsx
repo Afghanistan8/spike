@@ -4,21 +4,21 @@ import { Link, useNavigate } from "react-router-dom";
 import { Banner, Spinner, WalletError } from "../components/ui";
 import { createMarket, getMarketByUniqueKey } from "../lib/contract";
 import {
-  ASSETS,
-  ASSET_LABELS,
   KIND_DIRECTION,
   KIND_DOMINANCE,
   SOURCE_LABELS,
-  SOURCES,
   type Category,
 } from "../lib/env";
 import { defaultTargetDay, isWeekendGmt1, todayGmt1 } from "../lib/format";
+import { useUniverse } from "../lib/useUniverse";
 import { useWallet } from "../lib/useWallet";
 import { explainError } from "../lib/write";
 
 export function CreateMarket() {
   const { account, onStudionet } = useWallet();
   const navigate = useNavigate();
+  // The chain is the authority on the catalog; env.ts is only a fallback.
+  const universe = useUniverse();
 
   const [kind, setKind] = useState(KIND_DIRECTION);
   const [category, setCategory] = useState<Category>("CRYPTO");
@@ -33,7 +33,7 @@ export function CreateMarket() {
   const [duplicate, setDuplicate] = useState<string | null>(null);
 
   // Only CRYPTO dominance is hourly; everything else uses -1.
-  const hourly = category === "CRYPTO" && kind === KIND_DOMINANCE;
+  const hourly = universe.hourly(category) && kind === KIND_DOMINANCE;
   const effectiveHour = hourly ? hour : -1;
   const effectiveAsset = kind === KIND_DOMINANCE ? "" : asset;
 
@@ -41,7 +41,7 @@ export function CreateMarket() {
 
   function pickCategory(c: Category) {
     setCategory(c);
-    setAsset(ASSETS[c][0]);
+    setAsset(universe.assets[c][0]);
     // Commodities have no weekend session, so the default day differs per category.
     setDay(defaultTargetDay(c));
   }
@@ -140,7 +140,7 @@ export function CreateMarket() {
                 active={category === c}
                 onClick={() => pickCategory(c)}
                 title={c === "CRYPTO" ? "Crypto" : "Commodities"}
-                sub={ASSETS[c].join(" · ")}
+                sub={universe.assets[c].join(" · ")}
               />
             ))}
           </div>
@@ -150,7 +150,7 @@ export function CreateMarket() {
           <div>
             <label className="label">Asset</label>
             <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {ASSETS[category].map((a) => (
+              {universe.assets[category].map((a) => (
                 <button
                   key={a}
                   onClick={() => setAsset(a)}
@@ -166,7 +166,7 @@ export function CreateMarket() {
             </div>
             {category === "COMMODITIES" && (
               <p className="mt-2 text-[11px] text-zinc-500">
-                Settles on {ASSET_LABELS[asset]} over the US session.
+                Settles on {universe.label(asset)} over the US session.
               </p>
             )}
           </div>
@@ -214,8 +214,10 @@ export function CreateMarket() {
           <p className="label">Unique key</p>
           <p className="mono mt-1 break-all text-xs text-zinc-400">{uniqueKey}</p>
           <p className="mt-2 text-[11px] text-zinc-600">
-            Settled by {SOURCE_LABELS[SOURCES[category][0]]} +{" "}
-            {SOURCE_LABELS[SOURCES[category][1]]}. A market with this exact key can only
+            Settled by {SOURCE_LABELS[universe.sources[category][0]] ??
+              universe.sources[category][0]}{" + "}
+            {SOURCE_LABELS[universe.sources[category][1]] ??
+              universe.sources[category][1]}. A market with this exact key can only
             exist once.
           </p>
         </div>

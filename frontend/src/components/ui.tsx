@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { PHASE_LABEL, fmtGen, pct, phaseTone } from "../lib/format";
 import type { Market } from "../lib/contract";
 import { CHAIN_ID, NATIVE_CURRENCY, RPC_URL, SOURCE_LABELS } from "../lib/env";
+import { useUniverse } from "../lib/useUniverse";
 import { useWallet } from "../lib/useWallet";
 
 export function Chip({ children, tone }: { children: ReactNode; tone?: string }) {
@@ -151,10 +152,16 @@ export function DominanceRace({ market }: { market: Market }) {
 }
 
 export function MarketCard({ market }: { market: Market }) {
+  const universe = useUniverse();
   const isDominance = market.kind === "KIND_DOMINANCE";
+  // The contract already labels the asset; fall back to the catalog only if a
+  // market predates a label. Never re-derive it from the category by hand.
   const title = isDominance
     ? `${market.category === "CRYPTO" ? "Crypto" : "Commodity"} dominance`
-    : market.asset_label;
+    : market.asset_label || universe.label(market.asset);
+  const [srcA, srcB] = universe.sources[
+    market.category as keyof typeof universe.sources
+  ] ?? ["", ""];
 
   return (
     <Link
@@ -181,17 +188,9 @@ export function MarketCard({ market }: { market: Market }) {
       <div className="mt-4 flex items-center justify-between border-t border-ink-800 pt-3 text-[11px] text-zinc-500">
         <span>Pool {fmtGen(market.total_pool)} GEN</span>
         <span>
-          {SOURCE_LABELS[sourceA(market)] ?? sourceA(market)} +{" "}
-          {SOURCE_LABELS[sourceB(market)] ?? sourceB(market)}
+          {(SOURCE_LABELS[srcA] ?? srcA) + " + " + (SOURCE_LABELS[srcB] ?? srcB)}
         </span>
       </div>
     </Link>
   );
-}
-
-function sourceA(m: Market) {
-  return m.category === "CRYPTO" ? "gateio" : "yahoo";
-}
-function sourceB(m: Market) {
-  return m.category === "CRYPTO" ? "binance" : "nasdaq";
 }

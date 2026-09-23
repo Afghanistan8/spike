@@ -119,7 +119,7 @@ tests/fixtures/           recorded real feed responses
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests/ -q                       # 172 tests, no network
+pytest tests/ -q                       # 174 tests, no network
 genvm-lint check contracts/Spike.py    # must pass
 ```
 
@@ -137,7 +137,7 @@ Frontend:
 ```bash
 cd frontend
 npm install
-npm test          # 16 tests, incl. the full write/fee flow
+npm test          # 34 tests: the write/fee flow and the GMT+1 calendar
 npm run build
 npm run dev
 ```
@@ -195,7 +195,15 @@ itself with no code changes. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   `0xE1582599A503a2E97B6640545B1DCB0c85e49841` — **unchanged**; the fix pass of
   2026-09-23 needed no contract edit and no redeploy
 - Frontend live at [spike-sepia.vercel.app](https://spike-sepia.vercel.app/)
-- Market #1 created on-chain (ADA, direction, 2026-09-25)
+- Three markets created on-chain from the CLI:
+  - **#1** CRYPTO direction ADA, 2026-09-25
+  - **#2** CRYPTO direction ZEC, 2026-09-24
+  - **#3** COMMODITIES direction GOLD (GLD proxy), 2026-09-24 — the first
+    commodity market, settling on the Yahoo + Nasdaq pair
+- **Dominance markets cannot be created from the CLI.** `KIND_DOMINANCE`
+  requires `asset = ""`, and the CLI's argument parser coerces an empty string
+  to the integer `0` (`Number("") === 0`), which the contract rejects. There is
+  no string-forcing prefix. Create dominance markets from the UI.
 - **Outbound GEN works on Studionet.** An Intelligent Contract really can pay a
   wallet via `emit_transfer`, measured with a disposable probe: 1 GEN moved
   contract → EOA about 30 seconds after the call was accepted. An earlier
@@ -203,6 +211,10 @@ itself with no code changes. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   and is corrected. Refunds and claims are sound.
 - Payable calls (staking) require a browser wallet — the `genlayer` CLI
   hardcodes `value: 0n` and cannot attach GEN to a call. Use the UI.
+- **Not yet exercised on this contract:** a live stake, a live `resolve_market`
+  on a completed window, and a live claim. The payout mechanism itself is
+  proven (see above), but on a throwaway contract rather than on Spike. The
+  earliest resolvable market is **#2 / #3 after 2026-09-25 00:00 GMT+1**.
 
 See [docs/FIX-AUDIT.md](docs/FIX-AUDIT.md) for the live-site audit behind that
 correction.
