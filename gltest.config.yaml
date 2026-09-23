@@ -1,0 +1,7 @@
+# Spike test configuration.
+#
+# studionet is a preconfigured network in genlayer-test, so we only override
+# the paths. Deploy keys are supplied at deploy time, never committed here.
+paths:
+  contracts: contracts
+  artifacts: artifacts
