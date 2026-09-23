@@ -21,11 +21,14 @@ export const NATIVE_CURRENCY = {
 /**
  * The deployed Spike contract.
  *
- * Filled in by scripts/deploy.py after a successful Studionet deploy. While it
- * is empty the UI stays readable and tells you so instead of throwing.
+ * Deployed to Studionet on 2026-09-23 in tx
+ * 0x4efcbfe92b98e379966196dcbe7ef4a8b9b03da1c7b8230e1cc4989d19f6bed5.
+ * Override with VITE_SPIKE_ADDRESS to point a fork at its own deployment.
+ * While it is empty the UI stays readable and says so instead of throwing.
  */
 export const CONTRACT_ADDRESS: string =
-  (import.meta as any).env?.VITE_SPIKE_ADDRESS || "";
+  (import.meta as any).env?.VITE_SPIKE_ADDRESS ||
+  "0xE1582599A503a2E97B6640545B1DCB0c85e49841";
 
 export const HAS_CONTRACT = /^0x[0-9a-fA-F]{40}$/.test(CONTRACT_ADDRESS);
 

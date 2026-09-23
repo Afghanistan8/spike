@@ -28,25 +28,35 @@ const ESTIMATE = {
   policy: { enabled: true },
 };
 
-/** A fake GenLayer client that records the order and shape of every call. */
-function fakeClient(opts: { returned?: unknown; estimateThrows?: boolean } = {}) {
+/**
+ * A fake GenLayer client that records the order and shape of every call.
+ *
+ * `noFeeApi` models genlayer-js 1.1.8 - the version Studionet accepts - which
+ * has no `estimateTransactionFeesForWrite` at all.
+ */
+function fakeClient(
+  opts: { returned?: unknown; estimateThrows?: boolean; noFeeApi?: boolean } = {}
+) {
   const calls: string[] = [];
-  return {
+  const client: any = {
     calls,
-    estimateTransactionFeesForWrite: vi.fn(async (args: any) => {
-      calls.push("estimate:" + args.functionName);
-      if (opts.estimateThrows) throw new Error("fee policy unavailable");
-      return ESTIMATE;
-    }),
     writeContract: vi.fn(async (args: any) => {
       calls.push("write:" + args.functionName);
       return "0xdeadbeef";
     }),
     waitForTransactionReceipt: vi.fn(async () => {
       calls.push("wait");
-      return { status: "FINALIZED", result: { returned: opts.returned ?? "OK" } };
+      return { status: "ACCEPTED", result: { returned: opts.returned ?? "OK" } };
     }),
-  } as any;
+  };
+  if (!opts.noFeeApi) {
+    client.estimateTransactionFeesForWrite = vi.fn(async (args: any) => {
+      calls.push("estimate:" + args.functionName);
+      if (opts.estimateThrows) throw new Error("fee policy unavailable");
+      return ESTIMATE;
+    });
+  }
+  return client;
 }
 
 describe("writeWithEstimatedFees", () => {
@@ -108,6 +118,23 @@ describe("writeWithEstimatedFees", () => {
     ).rejects.toBeInstanceOf(FeeEstimationError);
 
     expect(client.writeContract).not.toHaveBeenCalled();
+  });
+
+  it("writes unpriced only when the SDK has no fee API at all", async () => {
+    // genlayer-js 1.1.8 / Studionet: there is no fee flow to honour.
+    const client = fakeClient({ noFeeApi: true });
+    const res = await writeWithEstimatedFees({
+      client,
+      account: ACCOUNT,
+      address: ADDRESS,
+      functionName: "resolve_market",
+      args: ["1"],
+    });
+
+    expect(res.feesEstimated).toBe(false);
+    expect(res.feeValue).toBeNull();
+    const passed = client.writeContract.mock.calls[0][0];
+    expect(passed).not.toHaveProperty("fees");
   });
 
   it("surfaces a revert reason from the receipt", async () => {

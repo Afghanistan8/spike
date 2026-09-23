@@ -6,7 +6,7 @@
  *
  * Why this file exists at all: on consensus v0.6 a write must carry a fee
  * distribution. Submitting `writeContract` without one produces a transaction
- * the network will not accept. So we always:
+ * the network will not accept. So whenever the SDK exposes the fee flow we:
  *
  *   1. call `estimateTransactionFeesForWrite` for THIS exact call
  *   2. pass the returned distribution / messageAllocations / feeValue into
@@ -16,6 +16,22 @@
  * If estimation fails we do NOT fall back to an unpriced write - we raise a
  * `FeeEstimationError` so the UI can say why, rather than sending a doomed
  * transaction and leaving the user staring at a pending hash.
+ *
+ * ---------------------------------------------------------------------------
+ * A real version split, not an excuse to skip step 1.
+ *
+ * `estimateTransactionFeesForWrite` exists only in genlayer-js >= 2.0.0-rc.1.
+ * Studionet (chain 61999) rejects that client outright - every `gen_call` comes
+ * back "Missing or invalid parameters", verified against the live deployment -
+ * so this app is pinned to genlayer-js 1.1.8, which Studionet does accept and
+ * which has no fee API at all. Writes on Studionet carry no fee distribution,
+ * which is why the CLI deploy and create_market both landed without one.
+ *
+ * So the helper is capability-driven rather than version-hardcoded: if the
+ * client exposes fee estimation we always use it and never write without it;
+ * if it does not, that network has no fee flow to honour. Point this app at a
+ * consensus-v0.6 network with genlayer-js 2.x and every write starts pricing
+ * itself with no further changes. See docs/ARCHITECTURE.md.
  */
 
 import type { GenLayerClient } from "genlayer-js/types";
@@ -81,18 +97,27 @@ export type WriteResult = {
   txHash: string;
   /** Whatever the contract method returned, e.g. "STAKED:...", "REFUNDED:...". */
   returned: unknown;
-  /** The fee estimate that was actually used. Surfaced for the UI/receipts. */
-  feeValue: bigint;
+  /** The fee estimate that was used, or null if this SDK has no fee flow. */
+  feeValue: bigint | null;
+  /** True when the transaction was priced before being sent. */
+  feesEstimated: boolean;
 };
 
+/** Does the installed client expose the consensus-v0.6 fee flow? */
+export function supportsFeeEstimation(client: any): boolean {
+  return typeof client?.estimateTransactionFeesForWrite === "function";
+}
+
 /**
- * Estimate fees for this exact call, then submit it carrying those fees.
+ * Estimate fees for this exact call.
  *
  * Exported separately so tests can assert the ordering without a network.
+ * Returns null only when the client has no fee API at all.
  */
 export async function estimateFees(a: WriteArgs) {
+  if (!supportsFeeEstimation(a.client)) return null;
   try {
-    return await a.client.estimateTransactionFeesForWrite({
+    return await (a.client as any).estimateTransactionFeesForWrite({
       account: a.account,
       address: a.address,
       functionName: a.functionName,
@@ -108,34 +133,42 @@ export async function writeWithEstimatedFees(
   a: WriteArgs,
   opts: { waitForReceipt?: boolean } = {}
 ): Promise<WriteResult> {
-  // 1. price this call
+  // 1. price this call, whenever the SDK can
   const estimate = await estimateFees(a);
 
-  // 2. submit carrying those fees - never an unpriced write
-  const txHash = await a.client.writeContract({
+  // 2. submit carrying those fees - never an unpriced write on a network that
+  //    prices writes at all
+  const txHash = await (a.client as any).writeContract({
     account: a.account,
     address: a.address,
     functionName: a.functionName,
     args: a.args ?? [],
     value: a.value ?? 0n,
-    fees: {
-      distribution: estimate.distribution,
-      messageAllocations: estimate.messageAllocations,
-      feeValue: estimate.feeValue,
-    },
+    ...(estimate
+      ? {
+          fees: {
+            distribution: estimate.distribution,
+            messageAllocations: estimate.messageAllocations,
+            feeValue: estimate.feeValue,
+          },
+        }
+      : {}),
   });
 
+  const feeValue = estimate ? estimate.feeValue : null;
+  const feesEstimated = estimate !== null;
+
   if (opts.waitForReceipt === false) {
-    return { txHash, returned: undefined, feeValue: estimate.feeValue };
+    return { txHash, returned: undefined, feeValue, feesEstimated };
   }
 
   // 3. wait for the validators to decide, and surface the outcome.
-  //    "decided" is the point at which the contract's return value and any
+  //    ACCEPTED is the point at which the contract's return value and any
   //    revert reason are known. Outbound GEN still moves on finalisation, which
   //    is why the UI says payouts arrive as a separate follow-up transaction.
-  const receipt = await a.client.waitForTransactionReceipt({
+  const receipt = await (a.client as any).waitForTransactionReceipt({
     hash: txHash,
-    waitUntil: "decided",
+    status: "ACCEPTED",
     retries: 60,
     interval: 3000,
   });
@@ -144,7 +177,7 @@ export async function writeWithEstimatedFees(
   const revert = readRevert(receipt);
   if (revert) throw new WriteRevertedError(revert);
 
-  return { txHash, returned, feeValue: estimate.feeValue };
+  return { txHash, returned, feeValue, feesEstimated };
 }
 
 function readReturn(receipt: any): unknown {
