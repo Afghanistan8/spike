@@ -15,7 +15,14 @@ import {
   ensureStudionet,
   getInjectedProvider,
 } from "./client";
-import { startDiscovery, subscribeWallets, type DiscoveredWallet } from "./discovery";
+import {
+  getSelected,
+  selectWallet,
+  startDiscovery,
+  subscribeWallets,
+  walletKey,
+  type DiscoveredWallet,
+} from "./discovery";
 import { CHAIN_ID } from "./env";
 
 type WalletState = {
@@ -26,13 +33,23 @@ type WalletState = {
   hasWallet: boolean;
   /** Discovery is still in its grace period; do not claim "no wallet" yet. */
   searching: boolean;
-  /** Everything discovered, so the UI can name what it found. */
+  /** Every wallet found, so the user can pick rather than be picked for. */
   wallets: DiscoveredWallet[];
+  /** The wallet in use, or null while the choice is still open. */
+  selected: DiscoveredWallet | null;
+  /** Several wallets exist and none has been chosen. */
+  needsChoice: boolean;
+  /** The picker is open. */
+  picking: boolean;
+  setPicking: (v: boolean) => void;
   connecting: boolean;
   error: string | null;
   connect: () => Promise<void>;
+  connectWith: (key: string) => Promise<void>;
   switchNetwork: () => Promise<void>;
   disconnect: () => void;
+  /** Forget the remembered wallet so the picker comes back. */
+  changeWallet: () => void;
 };
 
 const Ctx = createContext<WalletState | null>(null);
@@ -42,6 +59,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [chainId, setChainId] = useState<number | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
 
   // Wallet presence is STATE, not a value computed during render. Extensions
   // inject asynchronously, so a one-shot check during the first render is a
@@ -62,17 +80,23 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Recomputed whenever the discovered set or the selection changes, because
+  // selectWallet() re-emits and that replaces `wallets`.
+  const selected = useMemo(() => getSelected(), [wallets]);
+  const selectedKey = selected ? walletKey(selected) : null;
+  const needsChoice = wallets.length > 1 && selected === null;
+
   const refresh = useCallback(async () => {
     setAccount(await connectedAccount());
     setChainId(await currentChainId());
   }, []);
 
-  // Re-read the account whenever a wallet appears, so a late injection still
-  // picks up an already-authorised session without the user clicking anything.
+  // Re-read the account whenever the chosen wallet changes, so an already
+  // authorised session is picked up without the user clicking anything.
   useEffect(() => {
-    if (wallets.length === 0) return;
+    if (!selectedKey) return;
     refresh();
-  }, [wallets.length, refresh]);
+  }, [selectedKey, refresh]);
 
   useEffect(() => {
     const p = getInjectedProvider();
@@ -85,14 +109,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       p.removeListener?.("accountsChanged", onAccounts);
       p.removeListener?.("chainChanged", onChain);
     };
-  }, [wallets.length]);
+  }, [selectedKey]);
 
-  const connect = useCallback(async () => {
+  const doConnect = useCallback(async () => {
     setConnecting(true);
     setError(null);
     try {
       setAccount(await connectWallet());
       setChainId(await currentChainId());
+      setPicking(false);
     } catch (e: any) {
       // 4001 is the user closing the popup; not worth an angry red banner.
       setError(
@@ -104,6 +129,23 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setConnecting(false);
     }
   }, []);
+
+  /** Ask first when there is a real choice to make. */
+  const connect = useCallback(async () => {
+    if (needsChoice) {
+      setPicking(true);
+      return;
+    }
+    await doConnect();
+  }, [needsChoice, doConnect]);
+
+  const connectWith = useCallback(
+    async (key: string) => {
+      selectWallet(key);
+      await doConnect();
+    },
+    [doConnect]
+  );
 
   const switchNetwork = useCallback(async () => {
     setError(null);
@@ -130,6 +172,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setError(null);
   }, []);
 
+  /** Drop the remembered wallet and reopen the picker. */
+  const changeWallet = useCallback(() => {
+    selectWallet(null);
+    setAccount(null);
+    setError(null);
+    setPicking(true);
+  }, []);
+
   const value = useMemo<WalletState>(
     () => ({
       account,
@@ -138,22 +188,33 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       hasWallet: wallets.length > 0,
       searching: searching && wallets.length === 0,
       wallets,
+      selected,
+      needsChoice,
+      picking,
+      setPicking,
       connecting,
       error,
       connect,
+      connectWith,
       switchNetwork,
       disconnect,
+      changeWallet,
     }),
     [
       account,
       chainId,
       wallets,
+      selected,
+      needsChoice,
+      picking,
       searching,
       connecting,
       error,
       connect,
+      connectWith,
       switchNetwork,
       disconnect,
+      changeWallet,
     ]
   );
 

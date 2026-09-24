@@ -125,25 +125,74 @@ export function listWallets(): DiscoveredWallet[] {
   return snapshot();
 }
 
-/**
- * The provider to actually use.
- *
- * Prefers whatever the browser made the default (`window.ethereum`), so a user
- * with two wallets gets the one they chose in their own settings, and falls
- * back to the first that announced itself.
- */
-export function pickProvider(): Eip1193Provider | null {
+// --------------------------------------------------------------------------
+// Which wallet to use
+//
+// This used to guess: prefer `window.ethereum`, else the first that announced.
+// With two extensions installed that is a coin toss, and it popped the wrong
+// wallet. Guessing is now gone. With one wallet we use it; with several the
+// caller must choose, and the choice is remembered.
+// --------------------------------------------------------------------------
+
+const STORAGE_KEY = "spike.wallet";
+
+let selectedKey: string | null = readStoredKey();
+
+function readStoredKey(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null; // private mode, blocked storage - not fatal
+  }
+}
+
+function writeStoredKey(key: string | null) {
+  try {
+    if (key === null) localStorage.removeItem(STORAGE_KEY);
+    else localStorage.setItem(STORAGE_KEY, key);
+  } catch {
+    /* the selection still applies for this page load */
+  }
+}
+
+/** Stable identity for a wallet: its rdns if it has one. */
+export function walletKey(w: DiscoveredWallet): string {
+  return w.info.rdns || w.info.uuid || w.info.name;
+}
+
+export function getSelected(): DiscoveredWallet | null {
   const list = snapshot();
   if (list.length === 0) return null;
-
-  const def = (globalThis as any)?.ethereum;
-  if (def) {
-    const match = list.find((w) => w.provider === def);
-    if (match) return match.provider;
+  if (selectedKey) {
+    const hit = list.find((w) => walletKey(w) === selectedKey);
+    if (hit) return hit;
   }
-  return list[0].provider;
+  // Exactly one wallet is not a choice, so it needs no ceremony.
+  return list.length === 1 ? list[0] : null;
+}
+
+/** Choose a wallet by key. Pass null to forget the choice. */
+export function selectWallet(key: string | null) {
+  selectedKey = key;
+  writeStoredKey(key);
+  emit();
+}
+
+/**
+ * The provider to use, or null when the user still has to pick.
+ *
+ * Returning null with several wallets present is deliberate: it is the signal
+ * that makes the UI ask instead of assuming.
+ */
+export function pickProvider(): Eip1193Provider | null {
+  return getSelected()?.provider ?? null;
 }
 
 export function hasWallet(): boolean {
   return snapshot().length > 0;
+}
+
+/** True when wallets exist but none has been chosen yet. */
+export function needsChoice(): boolean {
+  return snapshot().length > 1 && getSelected() === null;
 }

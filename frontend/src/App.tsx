@@ -18,6 +18,7 @@ import { shortAddr } from "./lib/format";
 import { subscribeHealth, type Health } from "./lib/health";
 import { useWallet } from "./lib/useWallet";
 import { Banner, WalletError } from "./components/ui";
+import { WalletPicker } from "./components/WalletPicker";
 
 const LINKS = [
   { to: "/", label: "Board", end: true },
@@ -29,12 +30,15 @@ const LINKS = [
 function WalletButton() {
   const {
     account,
+    changeWallet,
     connect,
     connecting,
     disconnect,
     hasWallet,
     onStudionet,
     searching,
+    selected,
+    wallets,
     switchNetwork,
   } = useWallet();
   const [menu, setMenu] = useState(false);
@@ -61,8 +65,13 @@ function WalletButton() {
         className="btn-primary !px-3 !text-xs sm:!px-4 sm:!text-sm"
         onClick={connect}
         disabled={connecting}
+        title={selected ? `Connect with ${selected.info.name}` : undefined}
       >
-        {connecting ? "Connecting…" : "Connect"}
+        {connecting
+          ? "Connecting…"
+          : selected && wallets.length > 1
+            ? `Connect ${selected.info.name}`
+            : "Connect"}
       </button>
     );
   }
@@ -86,6 +95,25 @@ function WalletButton() {
       </button>
       {menu && (
         <div className="absolute right-0 z-30 mt-1 w-56 rounded-md border border-ink-700 bg-ink-900 p-1 shadow-xl">
+          {selected && (
+            <p className="flex items-center gap-2 px-3 pb-1 pt-2 text-[10px] uppercase tracking-wider text-zinc-600">
+              {selected.info.icon && (
+                <img src={selected.info.icon} alt="" className="h-3.5 w-3.5 rounded" />
+              )}
+              {selected.info.name}
+            </p>
+          )}
+          {wallets.length > 1 && (
+            <button
+              className="block w-full rounded px-3 py-2 text-left text-xs text-zinc-300 hover:bg-ink-800"
+              onClick={() => {
+                changeWallet();
+                setMenu(false);
+              }}
+            >
+              Change wallet
+            </button>
+          )}
           <button
             className="block w-full rounded px-3 py-2 text-left text-xs text-zinc-300 hover:bg-ink-800"
             onClick={() => {
@@ -239,6 +267,7 @@ export default function App() {
   return (
     <div className="min-h-screen">
       <Nav />
+      <WalletPicker />
 
       <main className="mx-auto max-w-6xl px-4 py-8">
         <div className="mb-4 empty:mb-0">
