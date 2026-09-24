@@ -11,20 +11,21 @@ import { studionet } from "genlayer-js/chains";
 import type { GenLayerClient } from "genlayer-js/types";
 
 import { CHAIN_ID, CHAIN_NAME, EXPLORER_URL, NATIVE_CURRENCY, RPC_URL } from "./env";
+import { hasWallet, pickProvider, type Eip1193Provider } from "./discovery";
 
-export type Eip1193Provider = {
-  request: (args: { method: string; params?: any[] | object }) => Promise<any>;
-  on?: (event: string, cb: (...a: any[]) => void) => void;
-  removeListener?: (event: string, cb: (...a: any[]) => void) => void;
-};
+export type { Eip1193Provider };
 
+/**
+ * The wallet provider, via EIP-6963 discovery with a `window.ethereum`
+ * fallback. Reading `window.ethereum` directly loses a race with extension
+ * injection - see discovery.ts.
+ */
 export function getInjectedProvider(): Eip1193Provider | null {
-  const w = globalThis as any;
-  return (w?.ethereum as Eip1193Provider) ?? null;
+  return pickProvider();
 }
 
 export function hasInjectedWallet(): boolean {
-  return getInjectedProvider() !== null;
+  return hasWallet();
 }
 
 /** A read-only client. Works with no wallet at all, so the board always loads. */
@@ -50,7 +51,9 @@ export async function connectWallet(): Promise<`0x${string}`> {
   const provider = getInjectedProvider();
   if (!provider) {
     throw new Error(
-      "No browser wallet detected. Install MetaMask or Rabby, then reload."
+      "No browser wallet responded. If MetaMask or Rabby is installed, unlock " +
+        "it and reload the page - extensions occasionally inject too late to be " +
+        "detected on first paint."
     );
   }
   const accounts: string[] = await provider.request({

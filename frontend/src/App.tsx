@@ -27,16 +27,29 @@ const LINKS = [
 ];
 
 function WalletButton() {
-  const { account, connect, connecting, hasWallet, onStudionet, switchNetwork } =
-    useWallet();
+  const {
+    account,
+    connect,
+    connecting,
+    disconnect,
+    hasWallet,
+    onStudionet,
+    searching,
+    switchNetwork,
+  } = useWallet();
+  const [menu, setMenu] = useState(false);
 
-  if (!hasWallet) {
+  // Only claim there is no wallet once discovery has actually finished looking.
+  // Offering Connect optimistically costs nothing: pressing it with no provider
+  // produces a precise error instead of a dead end.
+  if (!hasWallet && !searching) {
     return (
       <a
         href="https://metamask.io/download/"
         target="_blank"
         rel="noreferrer"
         className="btn-ghost !px-3 !text-xs sm:!px-4 sm:!text-sm"
+        title="No wallet extension responded to EIP-6963 discovery"
       >
         Install a wallet
       </a>
@@ -64,9 +77,31 @@ function WalletButton() {
     );
   }
   return (
-    <span className="mono rounded-md border border-ink-700 px-2 py-2 text-[11px] text-zinc-300 sm:px-3 sm:text-xs">
-      {shortAddr(account)}
-    </span>
+    <div className="relative">
+      <button
+        className="mono rounded-md border border-ink-700 px-2 py-2 text-[11px] text-zinc-300 hover:border-spike hover:text-spike sm:px-3 sm:text-xs"
+        onClick={() => setMenu((v) => !v)}
+      >
+        {shortAddr(account)}
+      </button>
+      {menu && (
+        <div className="absolute right-0 z-30 mt-1 w-56 rounded-md border border-ink-700 bg-ink-900 p-1 shadow-xl">
+          <button
+            className="block w-full rounded px-3 py-2 text-left text-xs text-zinc-300 hover:bg-ink-800"
+            onClick={() => {
+              disconnect();
+              setMenu(false);
+            }}
+          >
+            Disconnect
+          </button>
+          <p className="px-3 pb-2 pt-1 text-[10px] leading-snug text-zinc-600">
+            Clears the account here. Your wallet still decides what this site can
+            see - revoke it there to fully disconnect.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
